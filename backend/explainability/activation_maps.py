@@ -85,7 +85,7 @@ def save_activation_video(video_path, importance, out_path):
     writer = cv2.VideoWriter(
         temp_path,
         cv2.VideoWriter_fourcc(*"XVID"),
-        int(fps),
+        5,
         (width, height)
     )
 
