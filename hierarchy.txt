@@ -1,0 +1,33 @@
+Integrated Pipeline/
+│
+├── data/
+│   ├── videos/
+│   │   └── input_video.mp4
+│
+├── action_recognition/
+│   ├── cnn3d_model.py
+│   ├── infer_action.py
+│   └── best_3dcnn_89.pth
+│
+├── anomaly_detection/
+│   ├── feature_extractor.py
+│   ├── infer_anomaly.py
+│   └── best_model.pth
+│
+├── captioning/
+│   ├── caption_frames.py
+│
+├── explainability/
+│   ├── gradcam_action.py
+│   ├── activation_maps.py
+│
+├── run_pipeline.py
+│
+├── output/
+│   ├── action.json
+│   ├── anomaly_scores.npy
+│   ├── captions.json
+│   ├── gradcam_video.mp4
+│   └── final_report.json
+├── api/
+│   ├── main.py
