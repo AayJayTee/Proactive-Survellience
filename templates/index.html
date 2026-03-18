@@ -1,156 +1,107 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Visionary AI - Proactive Surveillance</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visionary AI - Surveillance Analysis</title>
     <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
+<body class="analysis-page">
+    <div class="page-shell">
+        <header class="page-header">
+            <div class="page-header-left">
+                <span class="brand-chip">Visionary AI</span>
+                <h1>Surveillance Analysis Workspace</h1>
+                <p class="subtitle">Upload a video and track processing progress in real time.</p>
+            </div>
+            <a class="btn btn-secondary" href="/">Home</a>
+        </header>
 
-<div class="container">
+        <main id="mainContent" class="analysis-stack">
+            <section class="panel">
+                <h2>Upload</h2>
+                <form id="uploadForm" aria-label="Upload video for analysis">
+                    <label for="videoInput">Choose video file</label>
+                    <input id="videoInput" type="file" accept="video/*" required aria-describedby="uploadHelp">
+                    <button id="analyzeBtn" class="btn btn-primary" type="submit">Analyze Video</button>
+                </form>
+                <p id="uploadHelp" class="muted">Large videos take longer. Track live status below.</p>
+            </section>
 
-    <h1>Visionary AI</h1>
-    <p class="subtitle">Proactive Surveillance with Explainable AI</p>
+            <section class="panel">
+                <h2>Live Processing</h2>
 
-    <form id="uploadForm">
-        <input type="file" id="videoInput" accept="video/*" required>
-        <button type="submit">Analyze Video</button>
-    </form>
+                <div class="model-grid" aria-label="Model status">
+                    <div class="model-pill">
+                        <span>Action Recognition model</span>
+                        <span id="statusActionModel" class="status ready">Ready</span>
+                    </div>
+                    <div class="model-pill">
+                        <span>Anomaly Detection model</span>
+                        <span id="statusAnomalyModel" class="status ready">Ready</span>
+                    </div>
+                    <div class="model-pill">
+                        <span>Captioning model</span>
+                        <span id="statusCaptionModel" class="status ready">Ready</span>
+                    </div>
+                </div>
 
-    <div id="loading" class="hidden">
-        Processing video... This may take a minute ⏳
+                <label for="globalProgress">Overall progress</label>
+                <progress id="globalProgress" max="100" value="0" aria-label="Pipeline progress"></progress>
+                <p id="progressText" class="muted" aria-live="polite">Idle</p>
+
+                <div class="stats-grid">
+                    <p>Current stage: <strong id="currentStage">Not started</strong></p>
+                    <p>Per-frame time: <strong id="perFrameMs">-</strong> ms</p>
+                    <p>Total processing time: <strong id="processingTime">-</strong> s</p>
+                </div>
+            </section>
+
+            <section id="resultsSection" class="hidden">
+                <div class="panel">
+                    <h2>Action Recognition</h2>
+                    <p>Action label: <strong id="actionLabel">-</strong></p>
+                    <p>Confidence: <span id="actionConfidenceBadge" class="badge">-</span></p>
+                </div>
+
+                <div class="panel">
+                    <h2>Anomaly Detection</h2>
+                    <p>Max score: <strong id="maxScore">-</strong></p>
+                    <p>Mean score: <strong id="meanScore">-</strong></p>
+                </div>
+
+                <div class="panel">
+                    <h2>Caption</h2>
+                    <p id="captionText">-</p>
+                </div>
+
+                <div class="panel">
+                    <h2>Alerts</h2>
+                    <ul id="alertsList" class="clean-list"></ul>
+                </div>
+
+                <div class="panel">
+                    <h2>Timeline</h2>
+                    <ul id="timelineList" class="clean-list"></ul>
+                </div>
+
+                <div class="panel">
+                    <h2>Explainability Videos</h2>
+                    <div class="video-grid">
+                        <div>
+                            <h3>Grad-CAM</h3>
+                            <video id="gradcamVideo" controls preload="metadata"></video>
+                        </div>
+                        <div>
+                            <h3>Activation Maps</h3>
+                            <video id="activationVideo" controls preload="metadata"></video>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
     </div>
 
-    <div id="results" class="hidden">
-
-        <!-- ACTION -->
-        <div class="card">
-            <h2>🎯 Action Recognition</h2>
-            <p><strong>Action:</strong> <span id="actionLabel"></span></p>
-            <p><strong>Confidence:</strong> <span id="actionConfidence"></span>%</p>
-        </div>
-
-        <!-- ANOMALY -->
-        <div class="card">
-            <h2>🚨 Anomaly Detection</h2>
-            <p><strong>Max Score:</strong> <span id="maxScore"></span></p>
-            <p><strong>Mean Score:</strong> <span id="meanScore"></span></p>
-        </div>
-
-        <!-- ALERTS -->
-        <div class="card">
-            <h2>⚠ Alerts</h2>
-            <ul id="alertsList"></ul>
-        </div>
-
-        <!-- CAPTION -->
-        <div class="card">
-            <h2>📝 Generated Caption</h2>
-            <p id="captionText"></p>
-        </div>
-
-        <!-- TIMELINE -->
-        <div class="card">
-            <h2>⏳ Timeline Events</h2>
-            <ul id="timelineList"></ul>
-        </div>
-
-        <!-- VIDEOS -->
-        <div class="card">
-            <h2>🔥 Grad-CAM Explanation</h2>
-            <video id="gradcamVideo" controls width="600"></video>
-        </div>
-
-        <div class="card">
-            <h2>🧠 Activation Maps</h2>
-            <video id="activationVideo" controls width="600"></video>
-        </div>
-
-        <!-- DOWNLOADS -->
-        <div class="card">
-            <h2>📄 Exported Reports</h2>
-            <a href="/output/events.csv" target="_blank" class="download-btn">Download CSV</a>
-            <a href="/output/report.pdf" target="_blank" class="download-btn">Download PDF</a>
-        </div>
-
-    </div>
-
-</div>
-
-<script>
-document.getElementById("uploadForm").addEventListener("submit", async function(e) {
-
-    e.preventDefault();
-
-    const file = document.getElementById("videoInput").files[0];
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append("video", file);
-
-    document.getElementById("loading").classList.remove("hidden");
-    document.getElementById("results").classList.add("hidden");
-
-    const response = await fetch("/api/analyze", {
-        method: "POST",
-        body: formData
-    });
-
-    const data = await response.json();
-
-    document.getElementById("loading").classList.add("hidden");
-    document.getElementById("results").classList.remove("hidden");
-
-    // ACTION
-    document.getElementById("actionLabel").innerText =
-        data.action_recognition.action;
-
-    document.getElementById("actionConfidence").innerText =
-        (data.action_recognition.confidence * 100).toFixed(2);
-
-    // ANOMALY
-    document.getElementById("maxScore").innerText =
-        data.anomaly.max_score.toFixed(4);
-
-    document.getElementById("meanScore").innerText =
-        data.anomaly.mean_score.toFixed(4);
-
-    // ALERTS
-    const alertsList = document.getElementById("alertsList");
-    alertsList.innerHTML = "";
-
-    if (data.alerts.length === 0) {
-        alertsList.innerHTML = "<li>No critical alerts</li>";
-    } else {
-        data.alerts.forEach(alert => {
-            const li = document.createElement("li");
-            li.innerText = alert;
-            alertsList.appendChild(li);
-        });
-    }
-
-    // CAPTION
-    document.getElementById("captionText").innerText = data.caption;
-
-    // TIMELINE
-    const timelineList = document.getElementById("timelineList");
-    timelineList.innerHTML = "";
-
-    data.timeline.forEach(event => {
-        const li = document.createElement("li");
-        li.innerText =
-            `${event.type} | ${event.start.toFixed(2)}s → ${event.end.toFixed(2)}s`;
-        timelineList.appendChild(li);
-    });
-
-    // VIDEOS
-    document.getElementById("gradcamVideo").src =
-        data.outputs.gradcam_video;
-
-    document.getElementById("activationVideo").src =
-        data.outputs.activation_video;
-
-});
-</script>
-
+    <script src="/static/app.js"></script>
 </body>
 </html>
