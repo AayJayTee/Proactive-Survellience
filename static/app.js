@@ -9,6 +9,7 @@ const el = {
     videoInput: document.getElementById("videoInput"),
     analyzeBtn: document.getElementById("analyzeBtn"),
     resultsSection: document.getElementById("resultsSection"),
+    deleteAllBtn: document.getElementById("deleteAllBtn"),
 
     statusActionModel: document.getElementById("statusActionModel"),
     statusAnomalyModel: document.getElementById("statusAnomalyModel"),
@@ -224,8 +225,57 @@ async function submitAnalyze(event) {
     }
 }
 
+async function deleteAllSavedData() {
+    const ok = window.confirm("This will permanently delete all uploaded videos and outputs. Continue?");
+    if (!ok) return;
+
+    el.deleteAllBtn.disabled = true;
+    try {
+        const res = await fetch("/api/data?include_audit=false", { method: "DELETE" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || data.error || "Delete failed");
+
+        if (state.pollTimer) {
+            clearInterval(state.pollTimer);
+            state.pollTimer = null;
+        }
+        state.jobId = null;
+        resetBeforeRun();
+        alert("All saved data deleted successfully.");
+    } catch (err) {
+        alert("Could not delete data: " + err.message);
+    } finally {
+        el.deleteAllBtn.disabled = false;
+    }
+}
+
+async function refreshDeleteAllButtonState() {
+    if (!el.deleteAllBtn) return;
+
+    try {
+        const res = await fetch("/api/data/summary");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Could not fetch data summary");
+
+        const hasData = Boolean(data.has_data);
+        el.deleteAllBtn.disabled = !hasData;
+        el.deleteAllBtn.title = hasData
+            ? "Delete all saved uploaded videos and outputs"
+            : "No saved data available to delete";
+    } catch (err) {
+        console.error("Delete button state check failed:", err);
+        // Keep enabled on API error so user is not blocked unexpectedly
+        el.deleteAllBtn.disabled = false;
+    }
+}
+
 function init() {
     el.uploadForm.addEventListener("submit", submitAnalyze);
+    if (el.deleteAllBtn) {
+        el.deleteAllBtn.addEventListener("click", deleteAllSavedData);
+    }
+    refreshDeleteAllButtonState();
+
 }
 
 window.addEventListener("DOMContentLoaded", init);

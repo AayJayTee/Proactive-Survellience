@@ -10,20 +10,21 @@
     <div class="page-shell">
         <header class="page-header">
             <div class="page-header-left">
-                <span class="brand-chip">Visionary AI</span>
-                <h1>Surveillance Analysis Workspace</h1>
-                <p class="subtitle">Upload a video and track processing progress in real time.</p>
+                <span class="brand-chip">SurakshaLens</span>
+                <h1>Video Analysis Workspace</h1>
+                <p class="subtitle">Upload a video to run end-to-end AI surveillance analysis, and monitor each processing stage live with real-time progress, model status, and instant result updates.</p>
             </div>
             <a class="btn btn-secondary" href="/">Home</a>
         </header>
 
         <main id="mainContent" class="analysis-stack">
             <section class="panel">
-                <h2>Upload</h2>
+                <h2>Upload Footage</h2>
                 <form id="uploadForm" aria-label="Upload video for analysis">
                     <label for="videoInput">Choose video file</label>
                     <input id="videoInput" type="file" accept="video/*" required aria-describedby="uploadHelp">
                     <button id="analyzeBtn" class="btn btn-primary" type="submit">Analyze Video</button>
+                    <button id="deleteAllBtn" class="btn btn-danger" type="button">Delete All Saved Data</button>
                 </form>
                 <p id="uploadHelp" class="muted">Large videos take longer. Track live status below.</p>
             </section>
@@ -48,7 +49,7 @@
 
                 <label for="globalProgress">Overall progress</label>
                 <progress id="globalProgress" max="100" value="0" aria-label="Pipeline progress"></progress>
-                <p id="progressText" class="muted" aria-live="polite">Idle</p>
+                <p id="progressText" class="muted" aria-live="polite">Platform Status: Idle</p>
 
                 <div class="stats-grid">
                     <p>Current stage: <strong id="currentStage">Not started</strong></p>

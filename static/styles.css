@@ -82,7 +82,7 @@ h3 {
 .subtitle {
     margin: 0;
     color: var(--ink-soft);
-    max-width: 72ch;
+    max-width: none;
 }
 
 .muted {
@@ -167,6 +167,23 @@ h3 {
     transform: translateY(-1px);
     box-shadow: 0 10px 20px rgba(15, 23, 42, 0.12);
     background: #f8fbff;
+}
+
+.btn-danger {
+    background: #b91c1c;
+    color: #ffffff;
+    box-shadow: 0 12px 22px rgba(185, 28, 28, 0.28);
+}
+.btn-danger:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 16px 28px rgba(185, 28, 28, 0.35);
+}
+
+.btn-danger:disabled {
+    opacity: 0.45;
+    filter: saturate(0.35);
+    cursor: not-allowed;
+    box-shadow: none;
 }
 
 button.btn:disabled {

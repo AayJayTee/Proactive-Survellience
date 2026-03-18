@@ -245,7 +245,6 @@ async def job_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return record
 
-
 @app.get("/api/audit-log")
 async def get_audit_log(limit: int = 200):
     if not os.path.exists(AUDIT_LOG_PATH):
@@ -264,6 +263,37 @@ async def get_audit_log(limit: int = 200):
 
     return {"rows": rows[-max(limit, 1):]}
 
+@app.get("/api/data/summary")
+async def data_summary():
+    input_files = 0
+    output_dirs = 0
+    output_files = 0
+
+    if os.path.isdir(DATA_DIR):
+        for name in os.listdir(DATA_DIR):
+            p = os.path.join(DATA_DIR, name)
+            if os.path.isfile(p):
+                input_files += 1
+
+    if os.path.isdir(OUTPUT_DIR):
+        for name in os.listdir(OUTPUT_DIR):
+            p = os.path.join(OUTPUT_DIR, name)
+            # ignore audit log for "saved analysis data" check
+            if os.path.abspath(p) == os.path.abspath(AUDIT_LOG_PATH):
+                continue
+            if os.path.isdir(p):
+                output_dirs += 1
+            elif os.path.isfile(p):
+                output_files += 1
+
+    has_data = (input_files + output_dirs + output_files) > 0
+
+    return {
+        "has_data": has_data,
+        "input_files": input_files,
+        "output_dirs": output_dirs,
+        "output_files": output_files
+    }
 
 @app.delete("/api/data/{job_id}")
 async def delete_saved_data(job_id: str):
@@ -286,3 +316,52 @@ async def delete_saved_data(job_id: str):
     write_audit("data_deleted", job_id, deleted)
     update_job(job_id, stage_message="Saved data deleted")
     return {"job_id": job_id, "deleted": deleted}
+
+@app.delete("/api/data")
+async def delete_all_saved_data(include_audit: bool = False):
+    # Block delete while jobs are active
+    with jobs_lock:
+        active = [jid for jid, rec in jobs.items() if rec.get("status") in {"queued", "running"}]
+    if active:
+        raise HTTPException(status_code=409, detail="Cannot delete all data while jobs are running.")
+
+    deleted = {
+        "input_files_deleted": 0,
+        "output_dirs_deleted": 0,
+        "output_files_deleted": 0,
+        "audit_deleted": False
+    }
+
+    # Delete uploaded videos
+    if os.path.isdir(DATA_DIR):
+        for name in os.listdir(DATA_DIR):
+            p = os.path.join(DATA_DIR, name)
+            if os.path.isfile(p):
+                os.remove(p)
+                deleted["input_files_deleted"] += 1
+
+    # Delete outputs (optionally keep audit)
+    if os.path.isdir(OUTPUT_DIR):
+        for name in os.listdir(OUTPUT_DIR):
+            p = os.path.join(OUTPUT_DIR, name)
+            if os.path.abspath(p) == os.path.abspath(AUDIT_LOG_PATH) and not include_audit:
+                continue
+            if os.path.isdir(p):
+                shutil.rmtree(p)
+                deleted["output_dirs_deleted"] += 1
+            elif os.path.isfile(p):
+                os.remove(p)
+                deleted["output_files_deleted"] += 1
+
+    # Recreate empty audit file if deleted
+    if include_audit:
+        deleted["audit_deleted"] = True
+        with open(AUDIT_LOG_PATH, "a", encoding="utf-8"):
+            pass
+    else:
+        write_audit("all_data_deleted", details=deleted)
+
+    with jobs_lock:
+        jobs.clear()
+
+    return {"message": "All saved data deleted", "deleted": deleted}
