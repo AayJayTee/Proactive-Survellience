@@ -143,11 +143,14 @@ def load_clip(video_path):
     return clip.unsqueeze(0)  # (1, 3, T, H, W)
 
 
-def run_action_recognition(video_path, model_path, return_features=False):
-    model = generate_model(num_classes=101)
-    model.load_state_dict(torch.load(model_path, map_location=DEVICE))
-    model.to(DEVICE)
-    model.eval()
+def run_action_recognition(video_path, model_path, return_features=False, preloaded_model=None):
+    if preloaded_model is not None:
+        model = preloaded_model
+    else:
+        model = generate_model(num_classes=101)
+        model.load_state_dict(torch.load(model_path, map_location=DEVICE))
+        model.to(DEVICE)
+        model.eval()
 
     clip = load_clip(video_path).to(DEVICE)
 

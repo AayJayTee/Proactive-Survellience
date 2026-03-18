@@ -113,39 +113,51 @@ def export_pdf(report_data, path):
 # ============================================================
 # MAIN PIPELINE
 # ============================================================
-def main(VIDEO_PATH):
+def main(VIDEO_PATH, action_model=None, anomaly_inferencer=None, captioner=None):
+
+    # ── Reuse or load the action backbone ──────────────────
+    if action_model is None:
+        action_model = generate_model(num_classes=101)
+        action_model.load_state_dict(torch.load(ACTION_MODEL_PATH, map_location=DEVICE))
+        action_model.to(DEVICE)
+        action_model.eval()
+
+    # ── Decode video ONCE — reused by captioning below ─────
+    cap = cv2.VideoCapture(VIDEO_PATH)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 20
+    all_frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        all_frames.append(frame)
+    cap.release()
 
     # 1️⃣ ACTION
-    print("🔹 Loading Action Recognition Model...")
+    print("🔹 Running Action Recognition...")
     action_result = run_action_recognition(
         VIDEO_PATH,
-        ACTION_MODEL_PATH
+        ACTION_MODEL_PATH,
+        preloaded_model=action_model
     )
     print(f"   ✅ Action Predicted: {action_result['action']}")
     print(f"   📊 Confidence: {action_result['confidence']:.4f}")
-    
-    # 2️⃣ ANOMALY
-    backbone = generate_model(num_classes=101)
-    backbone.load_state_dict(torch.load(ACTION_MODEL_PATH, map_location=DEVICE))
-    backbone.eval()
 
-    feature_extractor = VideoFeatureExtractor(backbone, device=DEVICE)
-    anomaly_model = AnomalyInferencer(
-        checkpoint_path=ANOMALY_MODEL_PATH,
-        device=DEVICE
-    )
-
+    # 2️⃣ ANOMALY — reuse backbone, skip second load of best_3dcnn.pth
+    feature_extractor = VideoFeatureExtractor(action_model, device=DEVICE)
+    if anomaly_inferencer is None:
+        anomaly_inferencer = AnomalyInferencer(
+            checkpoint_path=ANOMALY_MODEL_PATH,
+            device=DEVICE
+        )
     features = feature_extractor.extract(VIDEO_PATH)
-
-    total_frames = int(
-        cv2.VideoCapture(VIDEO_PATH).get(cv2.CAP_PROP_FRAME_COUNT)
-    )
-
-    anomaly_scores = anomaly_model.infer(features, total_frames)
-
-    fps = cv2.VideoCapture(VIDEO_PATH).get(cv2.CAP_PROP_FPS) or 20
+    anomaly_scores = anomaly_inferencer.infer(features, total_frames)
 
     # 3️⃣ EXPLAINABILITY
+    # GradCAM and ActivationMapExplainer intentionally load their own model
+    # copies because they register forward/backward hooks — sharing the
+    # preloaded model would cause those hooks to fire during unrelated passes.
     gradcam = ActionGradCAM(ACTION_MODEL_PATH)
     cam_maps, _ = gradcam.generate(VIDEO_PATH)
     save_gradcam_video(VIDEO_PATH, cam_maps, os.path.join(OUTPUT_DIR, "gradcam_video.mp4"))
@@ -154,21 +166,12 @@ def main(VIDEO_PATH):
     activation_maps = activation_explainer.generate(VIDEO_PATH)
     save_activation_video(VIDEO_PATH, activation_maps, os.path.join(OUTPUT_DIR, "activation_video.mp4"))
 
-    # 4️⃣ CAPTIONING
-    captioner = SceneCaptioner(device=DEVICE)
-    keyframes = []
-    cap = cv2.VideoCapture(VIDEO_PATH)
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        keyframes.append(frame)
-    cap.release()
+    # 4️⃣ CAPTIONING — use pre-decoded frames, skip the 5th video read
+    if captioner is None:
+        captioner = SceneCaptioner(device=DEVICE)
 
-    # downsample frames to a small set of keyframes for captioning
-    keyframes = keyframes[::max(len(keyframes)//CAPTION_KEYFRAMES, 1)]
+    keyframes = all_frames[::max(len(all_frames) // CAPTION_KEYFRAMES, 1)]
     frame_captions = captioner.caption_video_frames(keyframes)
-
     final_caption = captioner.build_final_caption(
         frame_captions,
         action_label=action_result["action"],
