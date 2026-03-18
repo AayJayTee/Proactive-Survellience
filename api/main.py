@@ -1,13 +1,13 @@
-# api/main.py
-
 import os
 import sys
+import json
 import shutil
 import uuid
-import json
-
+from datetime import datetime, timezone
+from threading import Lock
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, Request
+
+from fastapi import FastAPI, UploadFile, File, Request, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -19,9 +19,14 @@ from fastapi.templating import Jinja2Templates
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data", "videos")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+AUDIT_LOG_PATH = os.path.join(OUTPUT_DIR, "audit_log.jsonl")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+if not os.path.exists(AUDIT_LOG_PATH):
+    with open(AUDIT_LOG_PATH, "a", encoding="utf-8"):
+        pass
 
 # Ensure project root is importable
 if BASE_DIR not in sys.path:
@@ -37,38 +42,136 @@ ACTION_MODEL_PATH = os.path.join(BASE_DIR, "action_recognition", "best_3dcnn.pth
 ANOMALY_MODEL_PATH = os.path.join(BASE_DIR, "anomaly_detection", "best_anomaly_model.pth")
 
 # ---------------------------------------------------
-# Model registry — populated once at startup
+# In-memory stores
 # ---------------------------------------------------
-models: dict = {}
+models = {}
+jobs = {}
+jobs_lock = Lock()
+
+
+def utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def write_audit(event, job_id=None, details=None):
+    row = {
+        "timestamp": utc_now(),
+        "event": event,
+        "job_id": job_id,
+        "details": details or {}
+    }
+    with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+def set_job(job_id, payload):
+    with jobs_lock:
+        jobs[job_id] = payload
+
+
+def update_job(job_id, **changes):
+    with jobs_lock:
+        if job_id not in jobs:
+            return
+        jobs[job_id].update(changes)
+        jobs[job_id]["updated_at"] = utc_now()
+
+
+def get_job(job_id):
+    with jobs_lock:
+        return dict(jobs[job_id]) if job_id in jobs else None
+
+
+def run_pipeline_job(job_id, input_path):
+    update_job(
+        job_id,
+        status="running",
+        current_stage="startup",
+        stage_message="Pipeline started",
+        progress=1.0,
+        model_status={"action": "ready", "anomaly": "ready", "captioner": "ready"}
+    )
+
+    def progress_cb(update):
+        stage_time = update.get("stage_time_sec")
+        frames = update.get("frames")
+        per_frame_ms = None
+
+        if stage_time is not None and frames:
+            per_frame_ms = round((float(stage_time) * 1000.0) / max(int(frames), 1), 2)
+
+        update_job(
+            job_id,
+            status="running",
+            current_stage=update.get("stage", "running"),
+            stage_message=update.get("message", ""),
+            progress=float(update.get("percent", 0.0)),
+            stage_time_sec=stage_time,
+            per_frame_ms=per_frame_ms,
+            model_status={"action": "ready", "anomaly": "ready", "captioner": "ready"}
+        )
+
+    try:
+        from run_pipeline import main as run_main
+
+        report = run_main(
+            input_path,
+            action_model=models["action"],
+            anomaly_inferencer=models["anomaly"],
+            captioner=models["captioner"],
+            output_subdir=job_id,
+            progress_cb=progress_cb
+        )
+
+        update_job(
+            job_id,
+            status="completed",
+            current_stage="done",
+            stage_message="Analysis completed",
+            progress=100.0,
+            result=report,
+            error=None,
+            processing_time_sec=report.get("processing_time_sec"),
+            per_frame_ms=report.get("avg_time_per_frame_ms")
+        )
+        write_audit("analyze_completed", job_id, {"processing_time_sec": report.get("processing_time_sec")})
+
+    except Exception as exc:
+        update_job(
+            job_id,
+            status="failed",
+            current_stage="failed",
+            stage_message="Analysis failed",
+            progress=100.0,
+            error=str(exc)
+        )
+        write_audit("analyze_failed", job_id, {"error": str(exc)})
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load all heavy models once when the server starts."""
-    print("⏳ Loading action recognition model...")
-    m = generate_model(num_classes=101)
-    m.load_state_dict(torch.load(ACTION_MODEL_PATH, map_location=DEVICE))
-    m.to(DEVICE)
-    m.eval()
-    models["action"] = m
-    print("✅ Action model ready")
+    print("Loading action model...")
+    action_model = generate_model(num_classes=101)
+    action_model.load_state_dict(torch.load(ACTION_MODEL_PATH, map_location=DEVICE))
+    action_model.to(DEVICE)
+    action_model.eval()
+    models["action"] = action_model
+    print("Action model ready")
 
-    print("⏳ Loading anomaly model...")
+    print("Loading anomaly model...")
     models["anomaly"] = AnomalyInferencer(checkpoint_path=ANOMALY_MODEL_PATH, device=DEVICE)
-    print("✅ Anomaly model ready")
+    print("Anomaly model ready")
 
-    print("⏳ Loading captioning models (GIT + BLIP + PEGASUS) — takes ~1 min first time...")
+    print("Loading captioning models...")
     models["captioner"] = SceneCaptioner(device=DEVICE)
-    print("✅ Captioning models ready")
+    print("Captioning models ready")
 
-    yield  # ← server accepts requests here
-
+    write_audit("server_start", details={"device": DEVICE})
+    yield
+    write_audit("server_stop")
     models.clear()
 
 
-# ---------------------------------------------------
-# FastAPI App
-# ---------------------------------------------------
 app = FastAPI(title="Visionary AI Backend", lifespan=lifespan)
 
 app.add_middleware(
@@ -79,48 +182,107 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------------------------------------------
-# Templates & Static Files
-# ---------------------------------------------------
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
 
-# ---------------------------------------------------
-# Homepage
-# ---------------------------------------------------
 @app.get("/")
 async def home(request: Request):
+    return templates.TemplateResponse("home.html", {"request": request})
+
+@app.get("/analyze")
+async def analyze_page(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-
-# ---------------------------------------------------
-# Video Analysis API
-# ---------------------------------------------------
 @app.post("/api/analyze")
-async def analyze_video(video: UploadFile = File(...)):
-    file_id = str(uuid.uuid4())
-    input_path = os.path.join(DATA_DIR, f"{file_id}.mp4")
+async def analyze_video(background_tasks: BackgroundTasks, video: UploadFile = File(...)):
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(DATA_DIR, job_id + ".mp4")
 
     try:
-        # 1️⃣ Save uploaded file
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(video.file, buffer)
 
-        # 2️⃣ Run pipeline in-process with pre-loaded models
-        from run_pipeline import main as run_main
-        report = run_main(
-            input_path,
-            action_model=models["action"],
-            anomaly_inferencer=models["anomaly"],
-            captioner=models["captioner"],
-        )
+        set_job(job_id, {
+            "job_id": job_id,
+            "file_name": video.filename,
+            "input_path": input_path,
+            "status": "queued",
+            "progress": 0.0,
+            "current_stage": "queued",
+            "stage_message": "Queued for processing",
+            "stage_time_sec": None,
+            "per_frame_ms": None,
+            "processing_time_sec": None,
+            "model_status": {"action": "ready", "anomaly": "ready", "captioner": "ready"},
+            "result": None,
+            "error": None,
+            "created_at": utc_now(),
+            "updated_at": utc_now()
+        })
 
-        return report
+        write_audit("analyze_requested", job_id, {"file_name": video.filename})
+        background_tasks.add_task(run_pipeline_job, job_id, input_path)
 
-    except Exception as e:
+        return {
+            "job_id": job_id,
+            "status_url": "/api/status/" + job_id,
+            "message": "Processing started"
+        }
+
+    except Exception as exc:
         return JSONResponse(
             status_code=500,
-            content={"error": f"Unexpected server error: {str(e)}"}
+            content={"error": "Unexpected server error: " + str(exc)}
         )
+
+
+@app.get("/api/status/{job_id}")
+async def job_status(job_id: str):
+    record = get_job(job_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return record
+
+
+@app.get("/api/audit-log")
+async def get_audit_log(limit: int = 200):
+    if not os.path.exists(AUDIT_LOG_PATH):
+        return {"rows": []}
+
+    rows = []
+    with open(AUDIT_LOG_PATH, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except Exception:
+                continue
+
+    return {"rows": rows[-max(limit, 1):]}
+
+
+@app.delete("/api/data/{job_id}")
+async def delete_saved_data(job_id: str):
+    record = get_job(job_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    deleted = {"input_deleted": False, "output_deleted": False}
+
+    input_path = record.get("input_path")
+    if input_path and os.path.exists(input_path):
+        os.remove(input_path)
+        deleted["input_deleted"] = True
+
+    output_subdir = os.path.join(OUTPUT_DIR, job_id)
+    if os.path.isdir(output_subdir):
+        shutil.rmtree(output_subdir)
+        deleted["output_deleted"] = True
+
+    write_audit("data_deleted", job_id, deleted)
+    update_job(job_id, stage_message="Saved data deleted")
+    return {"job_id": job_id, "deleted": deleted}
