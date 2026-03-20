@@ -1,77 +1,104 @@
-# anomaly_detection/infer_anomaly.py
-
-import torch
+import cv2
 import numpy as np
-from .learner import Learner
+import torch
 
-
-def pad_features(features, target_dim=2048):
-    """
-    Deterministically expand feature dimension using zero padding.
-    """
-    current_dim = features.size(1)
-
-    if current_dim >= target_dim:
-        return features[:, :target_dim]
-
-    pad_size = target_dim - current_dim
-    padding = torch.zeros(features.size(0), pad_size, device=features.device)
-
-    return torch.cat([features, padding], dim=1)
+from .autoencoder import ConvolutionalAutoencoder
 
 
 class AnomalyInferencer:
-    def __init__(self, checkpoint_path, device='cuda'):
-        self.device = device
+    def __init__(
+        self,
+        checkpoint_path,
+        device="cuda",
+        frame_size=64,
+        batch_size=64,
+        latent_dim=256,
+        threshold_override=None,
+        default_threshold=0.005069
+    ):
+        self.device = torch.device(device)
+        self.frame_size = int(frame_size)
+        self.batch_size = int(batch_size)
+        self.latent_dim = int(latent_dim)
 
-        self.model = Learner(input_dim=2048).to(device)
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
 
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        state_dict = checkpoint['model_state_dict']
+        self.model = ConvolutionalAutoencoder(
+            input_channels=1,
+            latent_dim=self.latent_dim
+        ).to(self.device)
 
-        # Legacy vars-based checkpoint
-        if any(k.startswith('vars.') for k in state_dict.keys()):
-            print("🔧 Remapping anomaly checkpoint parameters (vars → classifier)...")
-
-            legacy_keys = sorted(
-                [k for k in state_dict.keys() if k.startswith('vars.')],
-                key=lambda x: int(x.split('.')[1])
-            )
-
-            legacy_weights = [state_dict[k] for k in legacy_keys]
-            classifier_params = list(self.model.classifier.parameters())
-
-            with torch.no_grad():
-                for p, w in zip(classifier_params, legacy_weights):
-                    p.copy_(w)
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            state_dict = checkpoint["model_state_dict"]
+        elif isinstance(checkpoint, dict) and all(torch.is_tensor(v) for v in checkpoint.values()):
+            state_dict = checkpoint
         else:
-            self.model.load_state_dict(state_dict, strict=True)
+            raise ValueError("Unsupported anomaly checkpoint format")
 
+        self.model.load_state_dict(state_dict, strict=True)
         self.model.eval()
-        print("✅ Anomaly model loaded successfully")
+
+        if threshold_override is not None:
+            self.threshold = float(threshold_override)
+        elif isinstance(checkpoint, dict) and checkpoint.get("threshold") is not None:
+            self.threshold = float(checkpoint["threshold"])
+        else:
+            self.threshold = float(default_threshold)
+
+        print("Anomaly autoencoder loaded successfully")
+
+    def _load_video_frames(self, video_path):
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"Could not open video: {video_path}")
+
+        frames = []
+        try:
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                resized = cv2.resize(gray, (self.frame_size, self.frame_size))
+                normalized = resized.astype(np.float32) / 255.0
+                frames.append(normalized)
+        finally:
+            cap.release()
+
+        if not frames:
+            raise RuntimeError("No frames were extracted from video")
+
+        return np.stack(frames, axis=0)
 
     @torch.no_grad()
-    def infer(self, features, total_frames):
-        """
-        features: Tensor (32, feature_dim)
-        """
-        features = features.to(self.device)
+    def infer(self, video_path, total_frames=None):
+        frames = self._load_video_frames(video_path)
+        frames_tensor = torch.from_numpy(frames).unsqueeze(1).to(self.device)
 
-        # 🔑 Deterministic feature expansion
-        features = pad_features(features, 2048)
+        scores = []
+        for i in range(0, len(frames_tensor), self.batch_size):
+            batch = frames_tensor[i:i + self.batch_size]
+            if self.device.type == "cuda":
+                with torch.amp.autocast("cuda"):
+                    reconstructed = self.model(batch)
+            else:
+                reconstructed = self.model(batch)
 
-        scores = self.model(features).squeeze(-1).cpu().numpy()
+            errors = ((batch - reconstructed) ** 2).mean(dim=[1, 2, 3])
+            scores.extend(errors.detach().cpu().numpy().tolist())
 
-        # Expand segment scores → frame-level
-        frame_scores = np.zeros(total_frames, dtype=np.float32)
-        steps = np.round(np.linspace(0, total_frames, 33)).astype(int)
+        frame_scores = np.asarray(scores, dtype=np.float32)
 
-        for i in range(32):
-            frame_scores[steps[i]:steps[i + 1]] = scores[i]
+        if total_frames is not None and total_frames > 0 and len(frame_scores) != total_frames:
+            if len(frame_scores) > total_frames:
+                frame_scores = frame_scores[:total_frames]
+            else:
+                pad_value = float(frame_scores[-1]) if len(frame_scores) else 0.0
+                pad = np.full((total_frames - len(frame_scores),), pad_value, dtype=np.float32)
+                frame_scores = np.concatenate([frame_scores, pad], axis=0)
 
         return frame_scores
 
 
 def save_anomaly_scores(frame_scores, out_path):
     np.save(out_path, frame_scores)
-    
