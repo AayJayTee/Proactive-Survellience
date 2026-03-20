@@ -39,7 +39,7 @@ from captioning.caption_frames import SceneCaptioner
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 ACTION_MODEL_PATH = os.path.join(BASE_DIR, "action_recognition", "best_3dcnn.pth")
-ANOMALY_MODEL_PATH = os.path.join(BASE_DIR, "anomaly_detection", "best_anomaly_model.pth")
+ANOMALY_MODEL_PATH = os.path.join(BASE_DIR, "anomaly_detection", "anomaly_model.pth")
 
 # ---------------------------------------------------
 # In-memory stores

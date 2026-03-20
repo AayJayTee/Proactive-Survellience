@@ -31,7 +31,6 @@ logging.set_verbosity_error()
 # ---------------- IMPORTS ----------------
 from action_recognition.infer_action import run_action_recognition
 from action_recognition.cnn3d_model import generate_model
-from anomaly_detection.feature_extractor import VideoFeatureExtractor
 from anomaly_detection.infer_anomaly import AnomalyInferencer
 from explainability.gradcam_action import ActionGradCAM, save_gradcam_video
 from explainability.activation_maps import ActivationMapExplainer, save_activation_video
@@ -39,7 +38,7 @@ from captioning.caption_frames import SceneCaptioner, save_captions
 
 # ---------------- CONFIG ----------------
 ACTION_MODEL_PATH = "action_recognition/best_3dcnn.pth"
-ANOMALY_MODEL_PATH = "anomaly_detection/best_anomaly_model.pth"
+ANOMALY_MODEL_PATH = "anomaly_detection/anomaly_model.pth"
 OUTPUT_DIR = "output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -49,9 +48,8 @@ CAPTION_KEYFRAMES = 3  # number of keyframes to extract for captioning (reduce f
 # ============================================================
 # EVENT BUILDER
 # ============================================================
-def build_timeline(anomaly_scores, fps, action_label, action_conf):
+def build_timeline(anomaly_scores, fps, action_label, action_conf, threshold):
     events = []
-    threshold = 0.2                        #change to configure threshold to detect anomalies
     active = None
 
     for i, score in enumerate(anomaly_scores):
@@ -184,14 +182,15 @@ def main(
 
     # 2) ANOMALY
     t_anomaly = time.perf_counter()
-    feature_extractor = VideoFeatureExtractor(action_model, device=DEVICE)
     if anomaly_inferencer is None:
         anomaly_inferencer = AnomalyInferencer(
             checkpoint_path=ANOMALY_MODEL_PATH,
             device=DEVICE
         )
-    features = feature_extractor.extract(VIDEO_PATH)
-    anomaly_scores = anomaly_inferencer.infer(features, total_frames)
+
+    anomaly_scores = anomaly_inferencer.infer(VIDEO_PATH, total_frames=total_frames)
+    anomaly_threshold = anomaly_inferencer.threshold
+
     stage_times["anomaly_sec"] = round(time.perf_counter() - t_anomaly, 4)
     emit_progress(progress_cb, "anomaly", 50, "Anomaly inference done", stage_times["anomaly_sec"], max(total_frames, 1))
 
@@ -232,12 +231,13 @@ def main(
         anomaly_scores,
         fps,
         action_result["action"],
-        action_result["confidence"]
+        action_result["confidence"],
+        threshold=anomaly_threshold
     )
 
     alerts = []
     for e in timeline:
-        if e.get("max_score", 0) > 0.8:
+        if e.get("max_score", 0) > (anomaly_threshold * 2.0):
             alerts.append("High anomaly detected")
     stage_times["postprocess_sec"] = round(time.perf_counter() - t_post, 4)
 
@@ -249,7 +249,8 @@ def main(
         "action_recognition": action_result,
         "anomaly": {
             "max_score": float(anomaly_scores.max()),
-            "mean_score": float(anomaly_scores.mean())
+            "mean_score": float(anomaly_scores.mean()),
+            "threshold": float(anomaly_threshold)
         },
         "caption": final_caption,
         "timeline": timeline,
